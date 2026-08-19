@@ -31,7 +31,7 @@ import java.util.Locale
 class BillingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao())
+    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao(), db.readingReminderDao())
     private val accessKeyRepository = LocalAccessKeyRepository(application)
     private val authRepository = AuthRepository(accessKeyRepository)
     private val wifiSyncManager = com.example.service.WifiSyncManager(application, db, accessKeyRepository)
