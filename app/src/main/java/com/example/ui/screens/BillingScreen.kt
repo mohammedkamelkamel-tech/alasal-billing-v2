@@ -282,7 +282,7 @@ fun BillingScreen(
 @Composable
 private fun EmptyBillingState(text: String) {
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().weight(1f),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

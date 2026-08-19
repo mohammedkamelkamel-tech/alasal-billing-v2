@@ -144,3 +144,11 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         db.execSQL("UPDATE bills SET paymentAt = CASE WHEN paymentDate != '' THEN COALESCE(strftime('%s', substr(paymentDate,7,4)||'-'||substr(paymentDate,4,2)||'-'||substr(paymentDate,1,2))*1000, 0) ELSE 0 END")
     }
 }
+
+
+/** إضافة سعر الكيلوواط الثابت لكل مشترك. الفواتير القديمة تحتفظ بسعرها داخل BillEntity. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE users ADD COLUMN unitPrice REAL NOT NULL DEFAULT 170.0")
+    }
+}

@@ -17,5 +17,7 @@ data class UserEntity(
     val isActive: Boolean = true,
     val lastLogin: String = "01/08/2026 10:30 ص",
     val joinDate: String = "15/01/2025",
-    val meterNumber: String = ""
+    val meterNumber: String = "",
+    /** سعر الكيلوواط الثابت لهذا المشترك، ويُستخدم تلقائياً عند إصدار الفاتورة. */
+    val unitPrice: Double = 170.0
 )

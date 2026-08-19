@@ -43,7 +43,7 @@ fun UserManagementScreen(
     onSearchQueryChange: (String) -> Unit,
     roleFilter: String,
     onRoleFilterChange: (String) -> Unit,
-    onAddUser: (String, String, String, String, String, String) -> Unit,
+    onAddUser: (String, String, String, String, String, String, Double) -> Unit,
     onToggleUserStatus: (String, Boolean) -> Unit,
     onDeleteUser: (UserEntity) -> Unit,
     onUpdateUser: (UserEntity) -> Unit = {},
@@ -207,8 +207,8 @@ fun UserManagementScreen(
         if (showAddUserDialog) {
             AddUserDialog(
                 onDismiss = { showAddUserDialog = false },
-                onConfirm = { name, email, role, phone, address, meterNumber ->
-                    onAddUser(name, email, role, phone, address, meterNumber)
+                onConfirm = { name, email, role, phone, address, meterNumber, unitPrice ->
+                    onAddUser(name, email, role, phone, address, meterNumber, unitPrice)
                     showAddUserDialog = false
                     Toast.makeText(context, "تمت إضافة المشترك بنجاح", Toast.LENGTH_SHORT).show()
                 }
@@ -385,13 +385,14 @@ fun UserCard(
 @Composable
 fun AddUserDialog(
     onDismiss: () -> Unit,
-    onConfirm: (name: String, email: String, role: String, phone: String, address: String, meterNumber: String) -> Unit
+    onConfirm: (name: String, email: String, role: String, phone: String, address: String, meterNumber: String, unitPrice: Double) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var meterNumber by remember { mutableStateOf("") }
+    var unitPrice by remember { mutableStateOf("170") }
     var selectedRole by remember { mutableStateOf(UserRole.SUB_ACCOUNT) }
 
     AlertDialog(
@@ -434,6 +435,14 @@ fun AddUserDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = unitPrice,
+                    onValueChange = { unitPrice = it.filter { c -> c.isDigit() || c == '.' } },
+                    label = { Text("سعر الكيلوواط للمشترك") },
+                    suffix = { Text("ريال") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 Text("نوع الحساب:", style = MaterialTheme.typography.labelSmall)
                 FilterChip(
@@ -447,7 +456,7 @@ fun AddUserDialog(
             Button(
                 onClick = {
                     if (name.isNotBlank() && email.isNotBlank()) {
-                        onConfirm(name, email, selectedRole.name, phone, address, meterNumber)
+                        onConfirm(name, email, selectedRole.name, phone, address, meterNumber, unitPrice.toDoubleOrNull() ?: 170.0)
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = VibrantGreen)
@@ -474,6 +483,7 @@ fun EditUserDialog(
     var phone by remember { mutableStateOf(user.phone) }
     var address by remember { mutableStateOf(user.address) }
     var meterNumber by remember { mutableStateOf(user.meterNumber) }
+    var unitPrice by remember { mutableStateOf(user.unitPrice.toString().removeSuffix(".0")) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -515,6 +525,14 @@ fun EditUserDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = unitPrice,
+                    onValueChange = { unitPrice = it.filter { c -> c.isDigit() || c == '.' } },
+                    label = { Text("سعر الكيلوواط للمشترك") },
+                    suffix = { Text("ريال") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
@@ -526,7 +544,8 @@ fun EditUserDialog(
                             email = email,
                             phone = phone,
                             address = address,
-                            meterNumber = meterNumber
+                            meterNumber = meterNumber,
+                            unitPrice = unitPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: user.unitPrice
                         )
                         onConfirm(updated)
                     }

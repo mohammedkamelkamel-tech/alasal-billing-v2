@@ -31,7 +31,7 @@ import java.util.Locale
 class BillingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao(), db.readingReminderDao())
+    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao())
     private val accessKeyRepository = LocalAccessKeyRepository(application)
     private val authRepository = AuthRepository(accessKeyRepository)
     private val wifiSyncManager = com.example.service.WifiSyncManager(application, db, accessKeyRepository)
@@ -548,13 +548,16 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
         currentReading: Double,
         readingDate: String,
         notes: String,
-        unitPrice: Double = 25.0,
+        unitPrice: Double = 170.0,
         readingImageUri: String? = null
     ) {
         viewModelScope.launch {
             val effectivePrev = if (prevReading > 0.0) prevReading else repository.getLastReadingForUser(userId)
+            // السعر يؤخذ من بطاقة المشترك نفسها، ولا يعتمد على إدخال المحصل.
+            val subscriber = repository.getUserById(userId)
+            val effectiveUnitPrice = subscriber?.unitPrice?.takeIf { it > 0.0 } ?: unitPrice
             val consumption = (currentReading - effectivePrev).coerceAtLeast(0.0)
-            val subtotal = consumption * unitPrice
+            val subtotal = consumption * effectiveUnitPrice
 
             // المتأخرات الموجبة + الرصيد السالب الناتج عن الدفع الزائد.
             // مثال: فاتورة 200 ودفع 1000 => رصيد للمشترك 800، فيُخصم تلقائياً من القراءة القادمة.
@@ -587,7 +590,7 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
                 prevReading = effectivePrev,
                 currentReading = currentReading,
                 consumptionKwh = consumption,
-                unitPrice = unitPrice,
+                unitPrice = effectiveUnitPrice,
                 subtotalAmount = subtotal,
                 previousDebt = arrears - availableCredit,
                 totalAmount = total,
@@ -695,7 +698,8 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
         role: String,
         phone: String,
         address: String,
-        meterNumber: String
+        meterNumber: String,
+        unitPrice: Double
     ) {
         viewModelScope.launch {
             val code = "USER-2026-0${(10..99).random()}"
@@ -710,6 +714,7 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
                 phone = phone,
                 address = address,
                 meterNumber = meterNumber,
+                unitPrice = unitPrice.coerceAtLeast(0.0),
                 isActive = true
             )
             repository.insertUser(user)

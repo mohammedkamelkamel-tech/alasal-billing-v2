@@ -31,7 +31,7 @@ data class BillEntity(
     val prevReading: Double = 0.0,
     val currentReading: Double = 0.0,
     val consumptionKwh: Double = 0.0,
-    val unitPrice: Double = 25.0,
+    val unitPrice: Double = 170.0,
     val subtotalAmount: Double = 0.0,
     val previousDebt: Double = 0.0,
     val totalAmount: Double = 0.0,

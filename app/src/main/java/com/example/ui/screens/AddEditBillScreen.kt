@@ -76,7 +76,6 @@ fun AddEditBillScreen(
     // القراءة السابقة تُجلب تلقائياً من آخر قراءة محفوظة للمشترك ولا يُدخلها المستخدم
     var prevReadingText by remember { mutableStateOf("0") }
     var currentReadingText by remember { mutableStateOf("") }
-    var unitPriceText by remember { mutableStateOf("25") } // سعر الكيلو - تحديد يدوي
     // تاريخ اليوم تلقائياً مع إبقاء إمكانية تعديله يدوياً عبر التقويم
     var readingDateText by remember {
         mutableStateOf(SimpleDateFormat("dd/MM/yyyy", Locale.US).format(Date()))
@@ -117,7 +116,7 @@ fun AddEditBillScreen(
     val prevNum = prevReadingText.toDoubleOrNull() ?: 0.0
     val currNum = currentReadingText.toDoubleOrNull() ?: 0.0
     val consumption = (currNum - prevNum).coerceAtLeast(0.0)
-    val unitPrice = unitPriceText.toDoubleOrNull() ?: 25.0
+    val unitPrice = selectedUser?.unitPrice ?: 170.0
     val subtotal = consumption * unitPrice
     // لا توجد أي ضريبة: الإجمالي = قيمة الاستهلاك + المتأخرات
     val totalAmount = subtotal + arrears
@@ -189,17 +188,6 @@ fun AddEditBillScreen(
         }
 
         // Price per kWh (سعر الكيلو - تحديد يدوي)
-        OutlinedTextField(
-            value = unitPriceText,
-            onValueChange = { unitPriceText = it },
-            label = { Text("سعر الكيلو (ريال / ك.و.س) *") },
-            leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = "سعر الكيلو") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("unit_price_input"),
-            shape = RoundedCornerShape(12.dp)
-        )
 
         // Meter Readings
         Row(
@@ -417,7 +405,7 @@ fun AddEditBillScreen(
                             unitPrice,
                             imageUri?.toString()
                         )
-                        Toast.makeText(context, "تم حفظ الفاتورة بسعر كيلو ${unitPrice.toInt()} ريال بنجاح", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "تم حفظ الفاتورة بسعر المشترك ${unitPrice.toInt()} ريال/ك.و.س بنجاح", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(context, "يرجى اختيار المشترك أولاً", Toast.LENGTH_SHORT).show()
                     }
