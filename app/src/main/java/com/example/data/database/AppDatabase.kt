@@ -6,20 +6,26 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.data.dao.BillDao
 import com.example.data.dao.PermissionDao
+import com.example.data.dao.MeterReadingDao
+import com.example.data.dao.ReadingReminderDao
 import com.example.data.dao.UserDao
 import com.example.data.model.BillEntity
+import com.example.data.model.MeterReadingEntity
+import com.example.data.model.ReadingReminderEntity
 import com.example.data.model.RolePermissionEntity
 import com.example.data.model.UserEntity
 
 @Database(
-    entities = [UserEntity::class, BillEntity::class, RolePermissionEntity::class],
-    version = 5, // 👈 رُفع الإصدار بسبب إلغاء الضريبة وإضافة حقول الدفع الجزئي والمتأخرات
+    entities = [UserEntity::class, BillEntity::class, RolePermissionEntity::class, MeterReadingEntity::class, ReadingReminderEntity::class],
+    version = 10, // إضافة اسم المحصل لكل عملية تحصيل
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
     abstract fun billDao(): BillDao
     abstract fun permissionDao(): PermissionDao
+    abstract fun meterReadingDao(): MeterReadingDao
+    abstract fun readingReminderDao(): ReadingReminderDao
 
     companion object {
         @Volatile
@@ -33,7 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "electricity_billing_db"
                 )
                     // 👈 ترحيل حقيقي يحافظ على بيانات الفواتير القديمة بدل حذفها
-                    .addMigrations(MIGRATION_4_5)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                     // يبقى كشبكة أمان فقط للإصدارات القديمة جداً غير المُغطّاة بترحيل
                     .fallbackToDestructiveMigration()
                     .build()

@@ -7,6 +7,8 @@ import com.example.data.database.AppDatabase
 import com.example.data.database.DatabaseInitializer
 import com.example.data.model.AccessKey
 import com.example.data.model.BillEntity
+import com.example.data.model.MeterReadingEntity
+import com.example.data.model.ReadingReminderEntity
 import com.example.data.model.BillStatus
 import com.example.data.model.PermissionCatalog
 import com.example.data.model.PermissionKeys
@@ -29,7 +31,7 @@ import java.util.Locale
 class BillingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao())
+    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao())
     private val accessKeyRepository = LocalAccessKeyRepository(application)
     private val authRepository = AuthRepository(accessKeyRepository)
     private val wifiSyncManager = com.example.service.WifiSyncManager(application, db, accessKeyRepository)
@@ -185,11 +187,23 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit().putBoolean(key, value).apply()
     }
 
+    fun getPreferenceBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
+    fun getPreferenceString(key: String, default: String): String = prefs.getString(key, default) ?: default
+    fun updatePreferenceBoolean(key: String, value: Boolean) { prefs.edit().putBoolean(key, value).apply() }
+    fun updatePreferenceString(key: String, value: String) { prefs.edit().putString(key, value).apply() }
+
+
     private val _users = MutableStateFlow<List<UserEntity>>(emptyList())
     val users: StateFlow<List<UserEntity>> = _users.asStateFlow()
 
     private val _bills = MutableStateFlow<List<BillEntity>>(emptyList())
     val bills: StateFlow<List<BillEntity>> = _bills.asStateFlow()
+
+    private val _meterReadings = MutableStateFlow<List<MeterReadingEntity>>(emptyList())
+    val meterReadings: StateFlow<List<MeterReadingEntity>> = _meterReadings.asStateFlow()
+
+    val readingReminders: StateFlow<List<ReadingReminderEntity>> = repository.activeReadingReminders
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** مراقبة Room بشكل مستمر، مع تحديث الواجهة فور تغيّر البيانات. */
     private fun observeDatabaseChanges() {
@@ -197,7 +211,10 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
             repository.allUsers.collect { _users.value = it }
         }
         viewModelScope.launch {
-            repository.allBills.collect { _bills.value = it }
+            repository.allBills.collect { _bills.value = it.sortedWith(compareByDescending<BillEntity> { it.createdAt }.thenByDescending { it.issueDate }) }
+        }
+        viewModelScope.launch {
+            repository.allMeterReadings.collect { _meterReadings.value = it }
         }
     }
 
@@ -213,6 +230,15 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun _refreshBillsFromDb() {
         _bills.value = db.billDao().getAllBills().first()
+    }
+
+    private suspend fun _refreshMeterReadingsFromDb() {
+        _meterReadings.value = db.meterReadingDao().getAll().first()
+    }
+
+    /** تحديث صريح عند العودة للتطبيق أو تغيير التبويب، بدون الحاجة للخروج والدخول. */
+    fun refreshNow() {
+        viewModelScope.launch { refreshDataNow(); _refreshMeterReadingsFromDb() }
     }
 
     init {
@@ -247,7 +273,9 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
 
     /** آخر قراءة عداد محفوظة للمشترك — تُملأ تلقائياً كقراءة سابقة. */
     fun lastReadingForUser(userId: String): Double =
-        bills.value.filter { it.userId == userId }.maxOfOrNull { it.currentReading } ?: 0.0
+        meterReadings.value.filter { it.userId == userId }.maxByOrNull { it.createdAt }?.currentReading
+            ?: bills.value.filter { it.userId == userId }.maxByOrNull { it.createdAt }?.currentReading
+            ?: 0.0
 
     /** آخر دفعة مسجّلة للمشترك (التاريخ + المبلغ)، أو null إن لم توجد. */
     fun lastPaymentForUser(userId: String): Pair<String, Double>? =
@@ -461,6 +489,56 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
      * - إن لم تُمرَّر قراءة سابقة، تُجلب آخر قراءة محفوظة للمشترك تلقائياً.
      * - تاريخ الإصدار وتاريخ الاستحقاق يُحسبان تلقائياً (الاستحقاق بعد 15 يوماً).
      */
+    fun scheduleReadingReminder(userId: String, userName: String, reminderAt: Long, note: String = "") {
+        viewModelScope.launch {
+            val reminder = ReadingReminderEntity(
+                adminId = resolveOrganizationAdminId(),
+                userId = userId,
+                userName = userName,
+                reminderAt = reminderAt,
+                note = note
+            )
+            repository.insertReadingReminder(reminder)
+            com.example.utils.ReadingReminderWorker.schedule(getApplication(), reminder.id, userName, reminderAt, note)
+        }
+    }
+
+    fun deleteReadingReminder(id: String) {
+        viewModelScope.launch {
+            repository.deleteReadingReminder(id)
+            androidx.work.WorkManager.getInstance(getApplication()).cancelUniqueWork("reading_reminder_$id")
+        }
+    }
+
+    fun addMeterReading(
+        userId: String,
+        userName: String,
+        currentReading: Double,
+        readingDate: String,
+        notes: String = "",
+        imageUri: String? = null
+    ) {
+        viewModelScope.launch {
+            val previous = lastReadingForUser(userId)
+            val reading = MeterReadingEntity(
+                adminId = resolveOrganizationAdminId(),
+                userId = userId,
+                userName = userName,
+                previousReading = previous,
+                currentReading = currentReading,
+                readingDate = readingDate,
+                notes = notes,
+                readerName = currentAccessKey.value?.username.orEmpty(),
+                imageUri = imageUri,
+                createdAt = System.currentTimeMillis()
+            )
+            repository.insertMeterReading(reading)
+            _refreshMeterReadingsFromDb()
+            val synced = localNetworkSync.saveMeterReading(reading)
+            lastSyncError.value = if (synced) null else "تعذّرت مزامنة قراءة العداد عبر شبكة Wi‑Fi المحلية"
+        }
+    }
+
     fun addBill(
         userId: String,
         userName: String,
@@ -520,7 +598,8 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
                 status = if (total <= 0.0) BillStatus.PAID.name else BillStatus.UNPAID.name,
                 readingDate = issueDate,
                 notes = notes,
-                readingImageUri = readingImageUri
+                readingImageUri = readingImageUri,
+                createdAt = System.currentTimeMillis()
             )
             repository.insertBill(bill)
             refreshDataNow()
@@ -590,7 +669,8 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
     fun payBill(billId: String, amountPaid: Double, method: String = "نقدي") {
         viewModelScope.launch {
             val dateStr = todayFormatted()
-            val updatedBill = repository.registerPayment(billId, amountPaid, dateStr, method)
+            val collectorName = currentAccessKey.value?.username.orEmpty()
+            val updatedBill = repository.registerPayment(billId, amountPaid, dateStr, method, collectorName)
             selectedBill.value = updatedBill
             if (updatedBill != null) {
                 refreshDataNow()

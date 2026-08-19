@@ -26,6 +26,7 @@ enum class NotificationType {
     NEW_BILL,
     DUE_DATE_APPROACHING,
     PAYMENT_CONFIRMATION,
+    METER_READING_REMINDER,
     SYSTEM_ALERT
 }
 
@@ -85,6 +86,14 @@ object NotificationHelper {
         addNotificationRecord(title, message, NotificationType.DUE_DATE_APPROACHING)
 
         showSystemNotification(context, title, message, (billId + "_due").hashCode())
+    }
+
+    fun sendMeterReadingReminder(context: Context, subscriberName: String, note: String, notificationId: Int) {
+        createNotificationChannel(context)
+        val title = "📋 تذكير بأخذ قراءة العداد"
+        val message = if (note.isBlank()) "حان موعد أخذ قراءة عداد ($subscriberName)." else "حان موعد أخذ قراءة عداد ($subscriberName): $note"
+        addNotificationRecord(title, message, NotificationType.METER_READING_REMINDER)
+        showSystemNotification(context, title, message, notificationId)
     }
 
     fun checkAndNotifyApproachingDueDates(context: Context, bills: List<BillEntity>) {

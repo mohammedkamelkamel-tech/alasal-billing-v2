@@ -4,6 +4,8 @@ import com.example.data.dao.BillDao
 import com.example.data.dao.PermissionDao
 import com.example.data.dao.UserDao
 import com.example.data.model.BillEntity
+import com.example.data.model.MeterReadingEntity
+import com.example.data.model.ReadingReminderEntity
 import com.example.data.model.BillStatus
 import com.example.data.model.RolePermissionEntity
 import com.example.data.model.UserEntity
@@ -12,10 +14,14 @@ import kotlinx.coroutines.flow.Flow
 class BillingRepository(
     private val userDao: UserDao,
     private val billDao: BillDao,
-    private val permissionDao: PermissionDao
+    private val permissionDao: PermissionDao,
+    private val meterReadingDao: com.example.data.dao.MeterReadingDao,
+    private val readingReminderDao: com.example.data.dao.ReadingReminderDao
 ) {
     val allUsers: Flow<List<UserEntity>> = userDao.getAllUsers()
     val allBills: Flow<List<BillEntity>> = billDao.getAllBills()
+    val allMeterReadings: Flow<List<MeterReadingEntity>> = meterReadingDao.getAll()
+    val activeReadingReminders: Flow<List<ReadingReminderEntity>> = readingReminderDao.getActive()
 
     fun getBillsByStatus(status: String): Flow<List<BillEntity>> = billDao.getBillsByStatus(status)
 
@@ -36,14 +42,20 @@ class BillingRepository(
         billDao.getOutstandingBillsForUser(userId)
 
     /** آخر قراءة عداد محفوظة للمشترك (تُستخدم كقراءة سابقة تلقائية). */
-    suspend fun getLastReadingForUser(userId: String): Double =
-        billDao.getBillsForUserOnce(userId).maxOfOrNull { it.currentReading } ?: 0.0
+    suspend fun getLastReadingForUser(userId: String): Double {
+        val reading = meterReadingDao.getForUser(userId).maxByOrNull { it.createdAt }?.currentReading
+        return reading ?: (billDao.getBillsForUserOnce(userId).maxByOrNull { it.createdAt }?.currentReading ?: 0.0)
+    }
 
     /** إجمالي متأخرات المشترك = مجموع المتبقي من فواتيره غير المسددة. */
     suspend fun getArrearsForUser(userId: String): Double =
         billDao.getOutstandingBillsForUser(userId).sumOf { it.remainingAmount }
 
     suspend fun insertBill(bill: BillEntity): Unit = billDao.insertBill(bill)
+    suspend fun insertMeterReading(reading: MeterReadingEntity) = meterReadingDao.insert(reading)
+    suspend fun insertReadingReminder(reminder: ReadingReminderEntity) = readingReminderDao.insert(reminder)
+    suspend fun completeReadingReminder(id: String) = readingReminderDao.complete(id)
+    suspend fun deleteReadingReminder(id: String) = readingReminderDao.delete(id)
     suspend fun updateBill(bill: BillEntity) = billDao.updateBill(bill)
     suspend fun deleteBill(bill: BillEntity) = billDao.deleteBill(bill)
 
@@ -57,19 +69,21 @@ class BillingRepository(
         billId: String,
         amountPaidNow: Double,
         date: String,
-        method: String
+        method: String,
+        collectorName: String
     ): BillEntity? {
         val bill = billDao.getBillById(billId) ?: return null
         // السماح بالدفع الزائد: إذا دفع المشترك أكثر من المستحق، يُحفظ الفرق كرصيد
         // سالب في remainingAmount ليُخصم تلقائياً من الفاتورة القادمة.
         val newPaid = bill.paidAmount + amountPaidNow
         val newRemaining = bill.totalAmount - newPaid
+        val paymentAt = System.currentTimeMillis()
         val newStatus = when {
             newRemaining <= 0.0 -> BillStatus.PAID.name
             newPaid > 0.0 -> BillStatus.PARTIAL.name
             else -> BillStatus.UNPAID.name
         }
-        billDao.updateBillPayment(billId, newStatus, newPaid, newRemaining, date, method)
+        billDao.updateBillPayment(billId, newStatus, newPaid, newRemaining, date, method, collectorName, paymentAt)
         return billDao.getBillById(billId)
     }
 

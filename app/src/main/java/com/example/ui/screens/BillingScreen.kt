@@ -71,7 +71,7 @@ fun BillingScreen(
                     "PAID" -> bill.status == "PAID"
                     else -> true
                 }
-        }
+        }.sortedByDescending { it.createdAt }
     }
 
     val filteredBills = remember(bills, searchQuery, filter) {
@@ -89,7 +89,7 @@ fun BillingScreen(
             }
 
             matchesSearch && matchesFilter
-        }
+        }.sortedByDescending { it.createdAt }
     }
 
     val subscriberList = remember(bills, users, searchQuery, filter) {
@@ -107,7 +107,7 @@ fun BillingScreen(
             // في "جميع الفواتير" نعرض كل المشتركين، حتى من لم تصدر له فاتورة بعد.
             // في الفلاتر الأخرى نعرض فقط المشتركين الذين لديهم فاتورة مطابقة.
             matchesSearch && (filter == "ALL" || byUser[user.id].orEmpty().isNotEmpty())
-        }.sortedBy { it.name }
+        }.sortedWith(compareByDescending<UserEntity> { user -> eligibleBills.filter { it.userId == user.id }.maxOfOrNull { it.createdAt } ?: 0L }.thenBy { it.name })
     }
 
 
@@ -282,7 +282,7 @@ fun BillingScreen(
 @Composable
 private fun EmptyBillingState(text: String) {
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().weight(1f),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

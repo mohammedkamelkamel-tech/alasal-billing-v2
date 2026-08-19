@@ -29,12 +29,14 @@ import androidx.compose.material3.Button
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.DropdownMenu
@@ -78,7 +80,7 @@ enum class ScreenTab(
 ) {
     HOME("home", "الرئيسية", Icons.Filled.Home, Icons.Outlined.Home),
     BILLS("bills", "الفواتير", Icons.Filled.Receipt, Icons.Outlined.Receipt),
-    KEYS("keys", "المفاتيح", Icons.Filled.VpnKey, Icons.Outlined.VpnKey),
+    COLLECTION("collection", "التحصيل", Icons.Filled.AccountBalanceWallet, Icons.Outlined.AccountBalanceWallet),
     USERS("users", "المشتركين", Icons.Filled.People, Icons.Outlined.People),
     REPORTS("reports", "التقارير", Icons.Filled.BarChart, Icons.Outlined.BarChart)
 }
@@ -377,8 +379,9 @@ fun AppBottomNavigation(
 ) {
     val visibleTabs: List<ScreenTab> = ScreenTab.entries.filter { tab ->
         when (tab) {
-            ScreenTab.KEYS -> {
-                canPerformAction(PermissionCatalog.KEYS_VIEW) ||
+            ScreenTab.COLLECTION -> {
+                canPerformAction(PermissionCatalog.PAYMENTS_COLLECT) ||
+                    canPerformAction(PermissionKeys.CAN_PAY_BILL) ||
                     currentUserProfile.roleType == RoleType.SUPERVISOR
             }
             ScreenTab.USERS -> {

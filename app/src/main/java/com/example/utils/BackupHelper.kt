@@ -42,6 +42,30 @@ object BackupHelper {
         }
     }
 
+    suspend fun createBackupFile(context: Context, targetFile: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            targetFile.parentFile?.mkdirs()
+            val dbFile = context.getDatabasePath(DB_NAME)
+            val walFile = File(dbFile.parent, "$DB_NAME-wal")
+            val shmFile = File(dbFile.parent, "$DB_NAME-shm")
+            FileOutputStream(targetFile).use { fos ->
+                ZipOutputStream(fos).use { zos ->
+                    listOf(dbFile, walFile, shmFile).forEach { file ->
+                        if (file.exists()) {
+                            zos.putNextEntry(ZipEntry(file.name))
+                            FileInputStream(file).use { it.copyTo(zos) }
+                            zos.closeEntry()
+                        }
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
     suspend fun createBackupFileForSharing(context: Context): File? = withContext(Dispatchers.IO) {
         try {
             val dbFile = context.getDatabasePath(DB_NAME)

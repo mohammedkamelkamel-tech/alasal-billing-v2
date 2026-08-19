@@ -31,6 +31,7 @@ fun SettingsScreen(
     onNavigateToRBAC: () -> Unit,
     onLogoutAllDevices: () -> Unit,
     onNavigateToSync: () -> Unit,
+    onNavigateToReadingReminders: () -> Unit,
 ) {
     val darkTheme by viewModel.darkTheme.collectAsStateWithLifecycle()
     val language by viewModel.language.collectAsStateWithLifecycle()
@@ -42,6 +43,8 @@ fun SettingsScreen(
     val orgPhone by viewModel.orgPhone.collectAsStateWithLifecycle()
     val orgAddress by viewModel.orgAddress.collectAsStateWithLifecycle()
     val currency by viewModel.currency.collectAsStateWithLifecycle()
+    var autoBackupEnabled by remember { mutableStateOf(viewModel.getPreferenceBoolean("backup_auto_enabled", true)) }
+    var driveTreeUri by remember { mutableStateOf(viewModel.getPreferenceString("backup_drive_tree_uri", "")) }
 
     var languageMenuExpanded by remember { mutableStateOf(false) }
     var currencyMenuExpanded by remember { mutableStateOf(false) }
@@ -55,6 +58,23 @@ fun SettingsScreen(
     ) { isGranted ->
         if (!isGranted) {
             android.widget.Toast.makeText(context, "لم يتم منح صلاحية الإشعارات", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val driveFolderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: Exception) { }
+            driveTreeUri = uri.toString()
+            viewModel.updatePreferenceString("backup_drive_tree_uri", driveTreeUri)
+            com.example.utils.AutoBackupWorker.schedule(context)
+            Toast.makeText(context, "تم اختيار مجلد النسخ الاحتياطي، ويمكن أن يكون داخل Google Drive", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -311,8 +331,8 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("إدارة الصلاحيات (RBAC)", style = MaterialTheme.typography.titleSmall, color = ElectricBlue)
-                    Text("تكوين أذونات المستخدمين", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text("إدارة المفاتيح والصلاحيات", style = MaterialTheme.typography.titleSmall, color = ElectricBlue)
+                    Text("إدارة المفاتيح السرية وأذونات المستخدمين", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
                 Icon(Icons.Filled.AdminPanelSettings, contentDescription = "RBAC", tint = ElectricBlue)
             }
@@ -330,6 +350,20 @@ fun SettingsScreen(
                     Icon(Icons.Filled.Sync, contentDescription = "Sync", tint = ElectricBlue)
                 }
 
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { onNavigateToReadingReminders() }.padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("جدولة تذكير قراءة العدادات", style = MaterialTheme.typography.titleSmall, color = ElectricBlue)
+                    Text("حدد تاريخ ووقت التذكير لكل مشترك", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                }
+                Icon(Icons.Filled.Schedule, contentDescription = "التذكيرات", tint = ElectricBlue)
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
             // Backup
             Row(
                 modifier = Modifier
@@ -344,6 +378,33 @@ fun SettingsScreen(
                     Text("تصدير البيانات إلى ملف محلي", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
                 Icon(Icons.Filled.Backup, contentDescription = "نسخ احتياطي")
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            SettingsToggleRow(
+                title = "نسخة احتياطية يومية تلقائية",
+                subtitle = "حفظ نسخة يومياً على الهاتف عند الساعة 2 صباحاً",
+                checked = autoBackupEnabled,
+                onCheckedChange = { enabled ->
+                    autoBackupEnabled = enabled
+                    viewModel.updatePreferenceBoolean("backup_auto_enabled", enabled)
+                    if (enabled) com.example.utils.AutoBackupWorker.schedule(context) else com.example.utils.AutoBackupWorker.cancel(context)
+                }
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { driveFolderLauncher.launch(null) }.padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("مجلد النسخ الاحتياطي في Google Drive", style = MaterialTheme.typography.titleSmall)
+                    Text(if (driveTreeUri.isBlank()) "اختر مجلداً من Google Drive مرة واحدة" else "تم ربط مجلد Google Drive للنسخ اليومية", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                }
+                Icon(Icons.Filled.CloudUpload, contentDescription = "Google Drive", tint = ElectricBlue)
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

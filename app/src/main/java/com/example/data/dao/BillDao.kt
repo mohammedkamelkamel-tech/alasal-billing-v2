@@ -11,19 +11,19 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BillDao {
-    @Query("SELECT * FROM bills ORDER BY id DESC")
+    @Query("SELECT * FROM bills ORDER BY createdAt DESC, id DESC")
     fun getAllBills(): Flow<List<BillEntity>>
 
     @Query("SELECT * FROM bills WHERE id = :id")
     suspend fun getBillById(id: String): BillEntity?
 
-    @Query("SELECT * FROM bills WHERE userId = :userId ORDER BY id DESC")
+    @Query("SELECT * FROM bills WHERE userId = :userId ORDER BY createdAt DESC, id DESC")
     fun getBillsByUserId(userId: String): Flow<List<BillEntity>>
 
-    @Query("SELECT * FROM bills WHERE adminId = :adminId ORDER BY id DESC")
+    @Query("SELECT * FROM bills WHERE adminId = :adminId ORDER BY createdAt DESC, id DESC")
     fun getBillsByAdminId(adminId: String): Flow<List<BillEntity>>
 
-    @Query("SELECT * FROM bills WHERE status = :status ORDER BY id DESC")
+    @Query("SELECT * FROM bills WHERE status = :status ORDER BY createdAt DESC, id DESC")
     fun getBillsByStatus(status: String): Flow<List<BillEntity>>
 
     /** جميع فواتير مشترك معيّن (استعلام لحظي غير متدفق) لحساب المتأخرات وآخر قراءة. */
@@ -53,7 +53,7 @@ interface BillDao {
      */
     @Query(
         "UPDATE bills SET status = :status, paidAmount = :paidAmount, remainingAmount = :remainingAmount, " +
-            "paymentDate = :paymentDate, paymentMethod = :paymentMethod WHERE id = :id"
+            "paymentDate = :paymentDate, paymentMethod = :paymentMethod, paymentCollector = :paymentCollector, paymentAt = :paymentAt WHERE id = :id"
     )
     suspend fun updateBillPayment(
         id: String,
@@ -61,7 +61,9 @@ interface BillDao {
         paidAmount: Double,
         remainingAmount: Double,
         paymentDate: String,
-        paymentMethod: String
+        paymentMethod: String,
+        paymentCollector: String,
+        paymentAt: Long
     )
 
     /** تعليم فاتورة بأنها مُرحّلة بعد إدراج متبقّيها كمتأخرات في فاتورة أحدث. */

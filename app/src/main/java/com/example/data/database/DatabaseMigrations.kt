@@ -77,3 +77,70 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
         db.execSQL("ALTER TABLE bills_new RENAME TO bills")
     }
 }
+
+
+/** إضافة اسم المستخدم الذي قام بآخر عملية تحصيل على الفاتورة. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bills ADD COLUMN paymentCollector TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+
+/** إضافة جدول مستقل لقراءات العدادات. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS meter_readings (
+                id TEXT NOT NULL PRIMARY KEY,
+                adminId TEXT NOT NULL,
+                userId TEXT NOT NULL,
+                userName TEXT NOT NULL,
+                previousReading REAL NOT NULL,
+                currentReading REAL NOT NULL,
+                readingDate TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                readerName TEXT NOT NULL,
+                imageUri TEXT,
+                createdAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+}
+
+
+/** إضافة وقت إنشاء الفاتورة لترتيب الأحدث أولاً. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bills ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE bills SET createdAt = CASE WHEN issueDate != '' THEN COALESCE(strftime('%s', substr(issueDate,7,4)||'-'||substr(issueDate,4,2)||'-'||substr(issueDate,1,2))*1000, 0) ELSE 0 END")
+    }
+}
+
+
+/** إضافة جدول تذكيرات قراءة العدادات المجدولة. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS reading_reminders (
+                id TEXT NOT NULL PRIMARY KEY,
+                adminId TEXT NOT NULL,
+                userId TEXT NOT NULL,
+                userName TEXT NOT NULL,
+                reminderAt INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                createdAt INTEGER NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+    }
+}
+
+
+/** إضافة وقت آخر عملية تحصيل لترتيب المقبوضات بدقة. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bills ADD COLUMN paymentAt INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE bills SET paymentAt = CASE WHEN paymentDate != '' THEN COALESCE(strftime('%s', substr(paymentDate,7,4)||'-'||substr(paymentDate,4,2)||'-'||substr(paymentDate,1,2))*1000, 0) ELSE 0 END")
+    }
+}

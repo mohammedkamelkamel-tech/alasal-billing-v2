@@ -14,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -33,6 +35,7 @@ class MainActivity : ComponentActivity() {
 
         // Create Notification Channel for local notifications
         com.example.utils.NotificationHelper.createNotificationChannel(this)
+        com.example.utils.AutoBackupWorker.schedule(this)
 
         setContent {
             val viewModel: BillingViewModel = viewModel()
@@ -56,21 +59,33 @@ class MainActivity : ComponentActivity() {
             val navController = rememberNavController()
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route ?: "login"
+            val lifecycleOwner = LocalLifecycleOwner.current
+
+            DisposableEffect(lifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshNow()
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
 
             ElectricityBillingTheme(darkTheme = darkTheme) {
                 val showTopBar = currentAccessKey != null && currentRoute != "login"
-                val showBottomNav = currentAccessKey != null && currentRoute in listOf("home", "bills", "keys", "users", "reports")
-                val showBackButton = currentRoute in listOf("bill_details", "add_edit_bill", "profile", "settings")
+                val showBottomNav = currentAccessKey != null && currentRoute in listOf("home", "bills", "collection", "users", "reports")
+                val showBackButton = currentRoute in listOf("bill_details", "add_edit_bill", "meter_reading", "reading_reminders", "profile", "settings")
 
                 val screenTitle = when (currentRoute) {
                     "home" -> "الرئيسية"
                     "bills" -> "إدارة الفواتير"
                     "keys" -> "إدارة المفاتيح السرية (ADMIN)"
+                    "collection" -> "التحصيل والمقبوضات"
                     "users" -> "إدارة المشتركين"
                     "reports" -> "التقارير والإحصائيات"
                     "settings" -> "إعدادات الصلاحيات"
                     "bill_details" -> "تفاصيل الفاتورة"
                     "add_edit_bill" -> "إضافة / تعديل فاتورة"
+                    "meter_reading" -> "قراءة العداد"
+                    "reading_reminders" -> "تذكير قراءة العدادات"
                     "profile" -> "الملف الشخصي للجلسة"
                     else -> "نظام فواتير الكهرباء"
                 }
@@ -80,7 +95,7 @@ class MainActivity : ComponentActivity() {
                 // أما إذا كان في الرئيسية، فيُترك الخيار للنظام لإغلاق التطبيق مباشرة
                 if (currentRoute != "login" && currentRoute != "home") {
                     BackHandler {
-                        if (currentRoute in listOf("bills", "keys", "users", "reports", "profile", "settings")) {
+                        if (currentRoute in listOf("bills", "collection", "keys", "users", "reports", "profile", "settings")) {
                             navController.navigate("home") {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
@@ -178,7 +193,7 @@ class MainActivity : ComponentActivity() {
                                     viewModel.selectBill(bill)
                                     navController.navigate("bill_details")
                                 },
-                                onMeterReadingClick = { navController.navigate("add_edit_bill") }
+                                onMeterReadingClick = { navController.navigate("meter_reading") }
                             )
                         }
 
@@ -204,6 +219,23 @@ class MainActivity : ComponentActivity() {
                                             remaining > 0.0 -> "تم تسجيل دفعة جزئية للفاتورة ${bill.invoiceNumber}، المتبقي ${com.example.utils.CurrencyFormatter.riyal(remaining)}"
                                             remaining < 0.0 -> "تم قبول الدفع الزائد، أصبح لك رصيد ${com.example.utils.CurrencyFormatter.riyal(kotlin.math.abs(remaining))} يُخصم تلقائياً من الفاتورة القادمة"
                                             else -> "تم تسديد الفاتورة ${bill.invoiceNumber} بالكامل"
+                                        }
+                                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+
+                            composable("collection") {
+                                CollectionScreen(
+                                    bills = bills,
+                                    canPerformAction = { key -> viewModel.canPerformAction(key) },
+                                    onPayClick = { bill, amount, method ->
+                                        viewModel.payBill(bill.id, amount, method)
+                                        val remaining = (bill.remainingAmount.takeIf { it > 0.0 } ?: bill.totalAmount) - amount
+                                        val msg = when {
+                                            remaining > 0.0 -> "تم تسجيل تحصيل جزئي، المتبقي ${com.example.utils.CurrencyFormatter.riyal(remaining)}"
+                                            remaining < 0.0 -> "تم قبول المبلغ الزائد وأصبح رصيداً للمشترك"
+                                            else -> "تم تحصيل الفاتورة ${bill.invoiceNumber} بالكامل"
                                         }
                                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                                     }
@@ -262,12 +294,22 @@ class MainActivity : ComponentActivity() {
                                     viewModel = viewModel,
                                     onNavigateToRBAC = { navController.navigate("keys") },
                                     onNavigateToSync = { navController.navigate("sync") },
+                                    onNavigateToReadingReminders = { navController.navigate("reading_reminders") },
                                     onLogoutAllDevices = {
                                         viewModel.logout()
                                         navController.navigate("login") {
                                             popUpTo(0) { inclusive = true }
                                         }
                                     }
+                                )
+                            }
+                            composable("reading_reminders") {
+                                ReadingRemindersScreen(
+                                    users = users,
+                                    reminders = viewModel.readingReminders.collectAsStateWithLifecycle().value,
+                                    onSchedule = { uid, name, at, note -> viewModel.scheduleReadingReminder(uid, name, at, note) },
+                                    onDelete = { id -> viewModel.deleteReadingReminder(id) },
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
                             composable("sync") {
@@ -306,7 +348,21 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            composable("add_edit_bill") {
+    
+                        composable("meter_reading") {
+                            MeterReadingScreen(
+                                users = users,
+                                lastReadingFor = { uid -> viewModel.lastReadingForUser(uid) },
+                                onSaveReading = { uid, name, current, date, notes, image ->
+                                    viewModel.addMeterReading(uid, name, current, date, notes, image)
+                                    Toast.makeText(this@MainActivity, "تم حفظ قراءة العداد", Toast.LENGTH_SHORT).show()
+                                    navController.popBackStack()
+                                },
+                                onCancel = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable("add_edit_bill") {
                                 AddEditBillScreen(
                                     users = users,
                                     lastReadingFor = { uid -> viewModel.lastReadingForUser(uid) },

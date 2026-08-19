@@ -6,6 +6,7 @@ import com.example.data.database.AppDatabase
 import com.example.data.model.AccessKey
 import com.example.data.model.BillEntity
 import com.example.data.model.UserEntity
+import com.example.data.model.MeterReadingEntity
 import com.example.data.repository.LocalAccessKeyRepository
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -44,6 +45,9 @@ class LocalNetworkSync(
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val billListAdapter = moshi.adapter<List<BillEntity>>(
         Types.newParameterizedType(List::class.java, BillEntity::class.java)
+    )
+    private val readingListAdapter = moshi.adapter<List<MeterReadingEntity>>(
+        Types.newParameterizedType(List::class.java, MeterReadingEntity::class.java)
     )
     private val userListAdapter = moshi.adapter<List<UserEntity>>(
         Types.newParameterizedType(List::class.java, UserEntity::class.java)
@@ -88,6 +92,11 @@ class LocalNetworkSync(
         return sendOperation(JSONObjectPayload.delete("bill", bill.id))
     }
 
+    suspend fun saveMeterReading(reading: MeterReadingEntity): Boolean {
+        if (adminMode) return true
+        return sendOperation(JSONObjectPayload.upsertReading(readingListAdapter.toJson(listOf(reading))))
+    }
+
     suspend fun saveUser(user: UserEntity): Boolean {
         if (adminMode) return true
         return sendOperation(
@@ -128,13 +137,19 @@ class LocalNetworkSync(
                     syncSnapshotFromJson(
                         users = emptyList(),
                         bills = emptyList(),
-                        keys = emptyList()
+                        keys = emptyList(),
+                        readings = emptyList()
                     )
                     snapshotJson()
                 }
                 "UPSERT_BILL" -> {
                     val list = billListAdapter.fromJson(o.optString("data")).orEmpty()
                     list.forEach { db.billDao().insertBill(it) }
+                    snapshotJson()
+                }
+                "UPSERT_READING" -> {
+                    val list = readingListAdapter.fromJson(o.optString("data")).orEmpty()
+                    list.forEach { db.meterReadingDao().insert(it) }
                     snapshotJson()
                 }
                 "UPSERT_USER" -> {
@@ -160,7 +175,8 @@ class LocalNetworkSync(
     private suspend fun syncSnapshotFromJson(
         users: List<UserEntity>,
         bills: List<BillEntity>,
-        keys: List<AccessKey>
+        keys: List<AccessKey>,
+        readings: List<MeterReadingEntity>
     ) {
         // Reserved for future authenticated full snapshot import.
     }
@@ -169,11 +185,13 @@ class LocalNetworkSync(
         val users = db.userDao().getAllUsers().first()
         val bills = db.billDao().getAllBills().first()
         val keys = accessKeys.getAllLocalAccessKeys()
+        val readings = db.meterReadingDao().getAll().first()
         return org.json.JSONObject().apply {
             put("ok", true)
             put("users", org.json.JSONArray(userListAdapter.toJson(users)))
             put("bills", org.json.JSONArray(billListAdapter.toJson(bills)))
             put("keys", org.json.JSONArray(keyListAdapter.toJson(keys)))
+            put("readings", org.json.JSONArray(readingListAdapter.toJson(readings)))
         }.toString()
     }
 
@@ -266,11 +284,14 @@ class LocalNetworkSync(
         val users = userListAdapter.fromJson(o.optJSONArray("users")?.toString() ?: "[]").orEmpty()
         val bills = billListAdapter.fromJson(o.optJSONArray("bills")?.toString() ?: "[]").orEmpty()
         val keys = keyListAdapter.fromJson(o.optJSONArray("keys")?.toString() ?: "[]").orEmpty()
+        val readings = readingListAdapter.fromJson(o.optJSONArray("readings")?.toString() ?: "[]").orEmpty()
 
         db.userDao().deleteAllUsers()
         db.billDao().deleteAllBills()
+        db.meterReadingDao().deleteAll()
         users.takeIf { it.isNotEmpty() }?.let { db.userDao().insertUsers(it) }
         bills.takeIf { it.isNotEmpty() }?.let { db.billDao().insertBills(it) }
+        readings.takeIf { it.isNotEmpty() }?.let { db.meterReadingDao().insertAll(it) }
         val currentKeys = accessKeys.getAllLocalAccessKeys()
         currentKeys.filter { local -> keys.none { it.id == local.id } }
             .forEach { accessKeys.deleteAccessKey(it.id) }
@@ -280,6 +301,9 @@ class LocalNetworkSync(
     private object JSONObjectPayload {
         fun upsertBill(data: String) = org.json.JSONObject()
             .put("type", "UPSERT_BILL").put("data", data).toString()
+
+        fun upsertReading(data: String) = org.json.JSONObject()
+            .put("type", "UPSERT_READING").put("data", data).toString()
 
         fun upsertUser(data: String) = org.json.JSONObject()
             .put("type", "UPSERT_USER").put("data", data).toString()

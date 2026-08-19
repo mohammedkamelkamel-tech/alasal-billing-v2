@@ -282,6 +282,7 @@ fun BillDetailsScreen(
                         DetailRow(label = "إجمالي المدفوع", value = CurrencyFormatter.riyalFull(bill.paidAmount))
                         DetailRow(label = "المتبقي", value = CurrencyFormatter.riyalFull(bill.remainingAmount))
                         DetailRow(label = "طريقة الدفع", value = bill.paymentMethod.ifBlank { "نقدي" })
+                        DetailRow(label = "المحصل", value = bill.paymentCollector.ifBlank { "-" })
                         DetailRow(label = "حالة السداد", value = statusEnum.titleAr)
                     } else {
                         Text(
