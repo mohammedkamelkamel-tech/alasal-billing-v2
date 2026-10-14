@@ -33,21 +33,36 @@ class AutoBackupWorker(appContext: Context, workerParams: WorkerParameters) : Co
             .getString("backup_drive_tree_uri", null)
         if (!driveUri.isNullOrBlank()) {
             try {
-                uploadToDriveFolder(context, Uri.parse(driveUri), localFile)
+                val uploaded = uploadToDriveFolder(context, Uri.parse(driveUri), localFile)
+                if (!uploaded) {
+                    // تبقى النسخة المحلية سليمة، ويعيد WorkManager المحاولة عند تعذر الرفع.
+                    return Result.retry()
+                }
             } catch (_: Exception) {
-                // لا نفشل النسخة المحلية إذا تعذر الوصول إلى Drive مؤقتاً.
+                // لا نحذف النسخة المحلية أبداً؛ أعد المحاولة عند عطل مؤقت في Drive أو الاتصال.
+                return Result.retry()
             }
         }
         return Result.success()
     }
 
-    private fun uploadToDriveFolder(context: Context, treeUri: Uri, localFile: File) {
-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
+    private fun uploadToDriveFolder(context: Context, treeUri: Uri, localFile: File): Boolean {
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return false
         val existing = root.findFile(localFile.name)
-        existing?.delete()
-        val target = root.createFile("application/zip", localFile.name) ?: return
-        context.contentResolver.openOutputStream(target.uri)?.use { output ->
-            FileInputStream(localFile).use { input -> input.copyTo(output) }
+        if (existing != null && !existing.delete()) return false
+        val target = root.createFile("application/zip", localFile.name) ?: return false
+        val outputStream = context.contentResolver.openOutputStream(target.uri) ?: run {
+            target.delete()
+            return false
+        }
+        return try {
+            outputStream.use { output ->
+                FileInputStream(localFile).use { input -> input.copyTo(output) }
+            }
+            true
+        } catch (_: Exception) {
+            target.delete()
+            false
         }
     }
 
