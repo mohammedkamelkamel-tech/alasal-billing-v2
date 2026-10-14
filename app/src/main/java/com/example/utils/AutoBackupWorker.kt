@@ -16,7 +16,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-/** نسخ احتياطي يومي إلى الهاتف، ويمكن أيضاً إلى مجلد يختاره المستخدم داخل Google Drive. */
+/** ينشئ نسخة يومية محلية على الهاتف، ويرفع نسخة منها إلى Google Drive إذا كان مجلداً مرتبطاً. */
 class AutoBackupWorker(appContext: Context, workerParams: WorkerParameters) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val context = applicationContext
