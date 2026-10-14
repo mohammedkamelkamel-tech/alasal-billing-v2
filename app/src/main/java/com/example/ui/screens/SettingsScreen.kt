@@ -134,7 +134,7 @@ fun SettingsScreen(
                             if (success) {
                                 android.widget.Toast.makeText(context, "تم استعادة البيانات بنجاح، يرجى إعادة تشغيل التطبيق", android.widget.Toast.LENGTH_LONG).show()
                             } else {
-                                android.widget.Toast.makeText(context, "فشل استعادة البيانات", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, "تعذرت الاستعادة: الملف ليس نسخة احتياطية سليمة أو لا يحتوي قاعدة بيانات معروفة. احتفظ بالنسخة الأصلية وجرب ملف ZIP آخر.", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
@@ -395,7 +395,7 @@ fun SettingsScreen(
 
             SettingsToggleRow(
                 title = "نسخة احتياطية يومية تلقائية",
-                subtitle = "حفظ نسخة يومياً على الهاتف عند الساعة 2 صباحاً",
+                subtitle = "حفظ نسخة يومياً على الهاتف الساعة 2 صباحاً، ورفع نسخة إلى Google Drive إذا كان مرتبطاً",
                 checked = autoBackupEnabled,
                 onCheckedChange = { enabled ->
                     autoBackupEnabled = enabled
