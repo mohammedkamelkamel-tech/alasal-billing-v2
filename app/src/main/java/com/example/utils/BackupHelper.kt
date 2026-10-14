@@ -166,10 +166,10 @@ object BackupHelper {
     }
 
     private fun hasSqliteHeader(file: File): Boolean {
-        if (!file.isFile || file.length() < SQLITE_HEADER.length()) return false
+        if (!file.isFile || file.length() < SQLITE_HEADER.length) return false
         return try {
             FileInputStream(file).use { input ->
-                val header = ByteArray(SQLITE_HEADER.length())
+                val header = ByteArray(SQLITE_HEADER.length)
                 input.read(header) == header.size && String(header, Charsets.US_ASCII) == SQLITE_HEADER
             }
         } catch (_: Exception) {
