@@ -61,10 +61,13 @@ fun SettingsScreen(
         }
     }
 
+    // يفتح منتقي التخزين؛ يمكن للمستخدم اختيار Google Drive ثم تغيير الحساب من قائمة Drive الجانبية.
+    // لا نطلب OAuth واسع الصلاحيات؛ يحتفظ Android بإذن الكتابة للمجلد الذي اختاره المستخدم.
     val driveFolderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
+            val oldUri = driveTreeUri
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
@@ -73,8 +76,16 @@ fun SettingsScreen(
             } catch (_: Exception) { }
             driveTreeUri = uri.toString()
             viewModel.updatePreferenceString("backup_drive_tree_uri", driveTreeUri)
+            if (oldUri.isNotBlank() && oldUri != driveTreeUri) {
+                try {
+                    context.contentResolver.releasePersistableUriPermission(
+                        android.net.Uri.parse(oldUri),
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                } catch (_: Exception) { }
+            }
             com.example.utils.AutoBackupWorker.schedule(context)
-            Toast.makeText(context, "تم اختيار مجلد النسخ الاحتياطي، ويمكن أن يكون داخل Google Drive", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "تم حفظ مجلد النسخ السحابي. ستُرفع النسخ اليومية إليه تلقائياً.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -396,15 +407,46 @@ fun SettingsScreen(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { driveFolderLauncher.launch(null) }.padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("مجلد النسخ الاحتياطي في Google Drive", style = MaterialTheme.typography.titleSmall)
-                    Text(if (driveTreeUri.isBlank()) "اختر مجلداً من Google Drive مرة واحدة" else "تم ربط مجلد Google Drive للنسخ اليومية", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                }
                 Icon(Icons.Filled.CloudUpload, contentDescription = "Google Drive", tint = ElectricBlue)
+                Column(Modifier.weight(1f)) {
+                    Text("النسخ الاحتياطي عبر Google Drive", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (driveTreeUri.isBlank())
+                            "غير مرتبط — اختر حساب Google ومجلد النسخ"
+                        else
+                            "مرتبط بمجلد سحابي. لتغيير الحساب، افتح الاختيار واختر الحساب الآخر من قائمة Drive",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { driveFolderLauncher.launch(null) },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(if (driveTreeUri.isBlank()) "ربط Google Drive" else "تغيير الحساب أو المجلد")
+                        }
+                        if (driveTreeUri.isNotBlank()) {
+                            TextButton(onClick = {
+                                try {
+                                    context.contentResolver.releasePersistableUriPermission(
+                                        android.net.Uri.parse(driveTreeUri),
+                                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                    )
+                                } catch (_: Exception) { }
+                                driveTreeUri = ""
+                                viewModel.updatePreferenceString("backup_drive_tree_uri", "")
+                                Toast.makeText(context, "تم فصل النسخ السحابي. النسخ المحلي مستمر.", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Text("فصل")
+                            }
+                        }
+                    }
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
