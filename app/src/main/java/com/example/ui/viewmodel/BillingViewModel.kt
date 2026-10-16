@@ -31,10 +31,9 @@ import java.util.Locale
 class BillingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao(), db.readingReminderDao())
+    private val repository = BillingRepository(db.userDao(), db.billDao(), db.permissionDao(), db.meterReadingDao(), db.readingReminderDao(), db.paymentDao())
     private val accessKeyRepository = LocalAccessKeyRepository(application)
     private val authRepository = AuthRepository(accessKeyRepository)
-    private val wifiSyncManager = com.example.service.WifiSyncManager(application, db, accessKeyRepository)
     
     private val _discoveredDevices = kotlinx.coroutines.flow.MutableStateFlow<List<com.example.data.model.DiscoveredDevice>>(emptyList())
     val discoveredDevices: kotlinx.coroutines.flow.StateFlow<List<com.example.data.model.DiscoveredDevice>> = _discoveredDevices
@@ -51,29 +50,37 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
     fun startDiscovery() {
         viewModelScope.launch {
             _isDiscovering.value = true
-            wifiSyncManager.startDiscovery { devices ->
-                _discoveredDevices.value = devices
+            if (currentAccessKey.value?.role == "ADMIN") {
+                // جهاز الإدارة لا يبحث عن أجهزة المحصلين ولا يزامن معهم مباشرة.
+                _discoveredDevices.value = emptyList()
+                _syncStatus.value = "جهاز الإدارة فعال. المحصلون يرسلون بياناتهم إلى الإدارة تلقائياً."
+            } else {
+                val admin = localNetworkSync.discoverAdminDevice()
+                _discoveredDevices.value = admin?.let { listOf(it) } ?: emptyList()
+                _syncStatus.value = if (admin != null) "تم العثور على جهاز الإدارة" else "لم يتم العثور على جهاز الإدارة"
             }
+            _isDiscovering.value = false
         }
     }
 
     fun stopDiscovery() {
         _isDiscovering.value = false
-        wifiSyncManager.stopDiscovery()
     }
 
     fun syncWithDevice(device: com.example.data.model.DiscoveredDevice) {
         viewModelScope.launch {
-            _syncStatus.value = "جاري المزامنة مع ${device.name}..."
-            val result = wifiSyncManager.sync(device)
-            _syncStatus.value = result.statusMessage
-            if (result.history != null) {
-                _syncHistory.value = listOf(result.history) + _syncHistory.value
+            if (currentAccessKey.value?.role == "ADMIN") {
+                _syncStatus.value = "المزامنة تبدأ من جهاز المحصل فقط؛ لا تتم مزامنة الإدارة مع محصل آخر."
+                return@launch
             }
+            _syncStatus.value = "جاري المزامنة مع جهاز الإدارة..."
+            val ok = localNetworkSync.syncNowWithAdmin()
+            _syncStatus.value = if (ok) "تمت المزامنة مع جهاز الإدارة بنجاح" else "فشل المزامنة مع جهاز الإدارة"
         }
     }
 
     private val localNetworkSync = LocalNetworkSync(application, db, accessKeyRepository)
+    private val adminDeviceSecurity = com.example.service.AdminDeviceSecurity(application)
 
     // 👈 يُعلن عند فشل آخر عملية مزامنة عبر Wi‑Fi محلية (حفظ/حذف) حتى لا يبقى الفشل صامتاً
     // كما كان سابقاً (كانت الأخطاء تُطبع في Logcat فقط دون أي إشعار).
@@ -205,6 +212,9 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
     val readingReminders: StateFlow<List<ReadingReminderEntity>> = repository.activeReadingReminders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val payments: StateFlow<List<com.example.data.model.PaymentEntity>> = repository.allPayments
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     /** مراقبة Room بشكل مستمر، مع تحديث الواجهة فور تغيّر البيانات. */
     private fun observeDatabaseChanges() {
         viewModelScope.launch {
@@ -250,7 +260,17 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
             // استعادة جلسة المفتاح محلياً. لا يوجد اعتماد على الإنترنت.
             val savedKey = prefs.getString("saved_secret_key", null)
             if (savedKey != null) {
-                loginWithSecretKey(savedKey)
+                val savedLocal = accessKeyRepository.getAccessKeyBySecret(savedKey)
+                // حماية إضافية: أي جلسة ADMIN محفوظة من إصدار قديم تُمسح فوراً
+                // على جهاز غير معتمد، قبل أن تظهر واجهة الإدارة ولو للحظات.
+                if (savedLocal?.role.equals("ADMIN", ignoreCase = true) && !adminDeviceSecurity.isAdminDevice()) {
+                    prefs.edit().remove("saved_secret_key").apply()
+                    currentAccessKey.value = null
+                    localNetworkSync.setSessionAccessKey(null)
+                    localNetworkSync.stop()
+                } else {
+                    loginWithSecretKey(savedKey)
+                }
             }
         }
     }
@@ -319,9 +339,20 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
     suspend fun loginWithSecretKey(secretKeyInput: String): Pair<Boolean, String> {
         return when (val result = authRepository.verifySecretKey(secretKeyInput)) {
             is KeyVerificationResult.Success -> {
+                if (result.accessKey.role.equals("ADMIN", ignoreCase = true)) {
+                    // مفتاح ADMIN وحده لا يمنح أي جهاز جديد صلاحية الإدارة.
+                    // جهاز الإدارة يجب أن يكون قد تم اعتماده مسبقاً على هذا الجهاز.
+                    // لا نقوم أبداً بربط جهاز جديد تلقائياً، لأن ذلك يسمح لجوال المحصل
+                    // بالدخول كإدارة بمجرد معرفة مفتاح ADMIN.
+                    if (!adminDeviceSecurity.isAdminDevice()) {
+                        return Pair(false, "تم رفض دخول الإدارة: هذا الجهاز غير معتمد كجهاز إدارة. يجب اعتماد الجهاز من جهاز الإدارة الأصلي أولاً.")
+                    }
+                }
+
                 currentAccessKey.value = result.accessKey
+                localNetworkSync.setSessionAccessKey(result.accessKey)
                 prefs.edit().putString("saved_secret_key", secretKeyInput).apply()
-                if (result.accessKey.role == "ADMIN") {
+                if (result.accessKey.role.equals("ADMIN", ignoreCase = true)) {
                     localNetworkSync.startAsAdmin()
                 } else {
                     localNetworkSync.startAsClient()
@@ -539,6 +570,68 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** تعديل قراءة محفوظة مع الحفاظ على القراءة السابقة المسجلة معها. */
+    fun updateMeterReading(
+        readingId: String,
+        previousReading: Double,
+        currentReading: Double,
+        readingDate: String,
+        notes: String,
+        imageUri: String?
+    ) {
+        viewModelScope.launch {
+            val old = meterReadings.value.firstOrNull { it.id == readingId }
+                ?: return@launch
+            val updated = old.copy(
+                previousReading = previousReading,
+                currentReading = currentReading,
+                readingDate = readingDate,
+                notes = notes,
+                imageUri = imageUri,
+                readerName = currentAccessKey.value?.username ?: old.readerName
+            )
+            repository.updateMeterReading(updated)
+
+            // تصحيح القراءة ينعكس تلقائياً على الفاتورة المرتبطة.
+            val linkedBill = repository.getBillsForUserOnce(old.userId)
+                .filter { it.status != BillStatus.CARRIED.name }
+                .filter { it.prevReading == old.previousReading && it.currentReading == old.currentReading }
+                .maxByOrNull { it.createdAt }
+
+            if (linkedBill != null) {
+                val correctedConsumption = (currentReading - previousReading).coerceAtLeast(0.0)
+                val correctedSubtotal = correctedConsumption * linkedBill.unitPrice
+                val correctedNetTotal = correctedSubtotal + linkedBill.previousDebt
+                val correctedTotal = correctedNetTotal.coerceAtLeast(0.0)
+                val correctedRemaining = correctedTotal - linkedBill.paidAmount
+                val correctedStatus = when {
+                    correctedRemaining <= 0.0 -> BillStatus.PAID.name
+                    linkedBill.paidAmount > 0.0 -> BillStatus.PARTIAL.name
+                    else -> BillStatus.UNPAID.name
+                }
+                val correctedBill = linkedBill.copy(
+                    prevReading = previousReading,
+                    currentReading = currentReading,
+                    consumptionKwh = correctedConsumption,
+                    subtotalAmount = correctedSubtotal,
+                    totalAmount = correctedTotal,
+                    remainingAmount = correctedRemaining,
+                    status = correctedStatus,
+                    readingDate = readingDate,
+                    issueDate = if (linkedBill.issueDate.isBlank()) readingDate else linkedBill.issueDate,
+                    notes = notes.ifBlank { linkedBill.notes },
+                    readingImageUri = imageUri ?: linkedBill.readingImageUri
+                )
+                repository.updateBill(correctedBill)
+                localNetworkSync.saveBill(correctedBill)
+            }
+
+            _refreshMeterReadingsFromDb()
+            val synced = localNetworkSync.saveMeterReading(updated)
+            lastSyncError.value = if (synced) null else "تعذّرت مزامنة تعديل قراءة العداد عبر شبكة Wi‑Fi المحلية"
+        }
+    }
+
     fun addBill(
         userId: String,
         userName: String,
@@ -549,13 +642,14 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
         readingDate: String,
         notes: String,
         unitPrice: Double = 170.0,
-        readingImageUri: String? = null
+        readingImageUri: String? = null,
+        onSaved: (BillEntity) -> Unit = {}
     ) {
         viewModelScope.launch {
             val effectivePrev = if (prevReading > 0.0) prevReading else repository.getLastReadingForUser(userId)
-            // السعر يؤخذ من بطاقة المشترك نفسها، ولا يعتمد على إدخال المحصل.
-            val subscriber = repository.getUserById(userId)
-            val effectiveUnitPrice = subscriber?.unitPrice?.takeIf { it > 0.0 } ?: unitPrice
+            // سعر الكيلو الذي يصل من شاشة الفاتورة هو السعر المعتمد لهذه الفاتورة.
+            // الشاشة تبدأ افتراضياً بسعر المشترك، لكن يمكن تعديله قبل الحفظ.
+            val effectiveUnitPrice = unitPrice.coerceAtLeast(0.0)
             val consumption = (currentReading - effectivePrev).coerceAtLeast(0.0)
             val subtotal = consumption * effectiveUnitPrice
 
@@ -631,6 +725,54 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
             } catch (e: Exception) {
                 android.util.Log.e("BillingViewModel", "Notification send error: ${e.message}")
             }
+            onSaved(bill)
+        }
+    }
+
+    /** تعديل فاتورة محفوظة: تحديث القراءة والسعر وإعادة حساب الاستهلاك والإجمالي والمتبقي. */
+    fun updateBill(
+        billId: String,
+        prevReading: Double,
+        currentReading: Double,
+        readingDate: String,
+        notes: String,
+        unitPrice: Double,
+        readingImageUri: String?
+    ) {
+        viewModelScope.launch {
+            val old = repository.getBillById(billId) ?: return@launch
+            val effectivePrev = prevReading.coerceAtLeast(0.0)
+            val effectivePrice = unitPrice.coerceAtLeast(0.0)
+            val consumption = (currentReading - effectivePrev).coerceAtLeast(0.0)
+            val subtotal = consumption * effectivePrice
+            val total = (subtotal + old.previousDebt).coerceAtLeast(0.0)
+            val paid = old.paidAmount.coerceAtLeast(0.0)
+            val remaining = total - paid
+            val status = when {
+                remaining <= 0.0 -> BillStatus.PAID.name
+                paid > 0.0 -> BillStatus.PARTIAL.name
+                else -> BillStatus.UNPAID.name
+            }
+            val updated = old.copy(
+                prevReading = effectivePrev,
+                currentReading = currentReading,
+                consumptionKwh = consumption,
+                unitPrice = effectivePrice,
+                subtotalAmount = subtotal,
+                totalAmount = total,
+                remainingAmount = remaining,
+                status = status,
+                issueDate = readingDate.ifBlank { old.issueDate },
+                dueDate = dueDateFrom(readingDate.ifBlank { old.issueDate }),
+                readingDate = readingDate.ifBlank { old.readingDate },
+                notes = notes,
+                readingImageUri = readingImageUri,
+                createdAt = old.createdAt
+            )
+            repository.updateBill(updated)
+            refreshDataNow()
+            selectedBill.value = updated
+            localNetworkSync.saveBill(updated)
         }
     }
 
@@ -669,24 +811,70 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
      *   المتبقي = 0  -> مدفوعة
      *   المتبقي > 0  -> مدفوعة جزئياً (يُحفظ المتبقي كمتأخرات)
      */
-    fun payBill(billId: String, amountPaid: Double, method: String = "نقدي") {
+    fun payBill(
+        billId: String,
+        amountPaid: Double,
+        method: String = "نقدي",
+        onCompleted: (BillEntity, Double, String, com.example.data.model.PaymentEntity) -> Unit = { _, _, _, _ -> }
+    ) {
         viewModelScope.launch {
+            if (amountPaid <= 0.0) return@launch
+            val beforeBill = repository.getBillById(billId) ?: return@launch
+            val paymentId = java.util.UUID.randomUUID().toString()
             val dateStr = todayFormatted()
-            val collectorName = currentAccessKey.value?.username.orEmpty()
+            val collector = currentAccessKey.value
+            val collectorName = collector?.username.orEmpty()
+
+            // تُحفظ الدفعة محلياً أولاً لعمل التطبيق بدون انتظار الشبكة، ثم تُرسل
+            // كعملية تحصيل مستقلة إلى جهاز الإدارة. لا نرسل فاتورة معدلة كاملة؛
+            // لأن ذلك كان سبباً رئيسياً لاختلاط/ضياع تحصيلات المحصلين.
             val updatedBill = repository.registerPayment(billId, amountPaid, dateStr, method, collectorName)
-            selectedBill.value = updatedBill
             if (updatedBill != null) {
+                val payment = com.example.data.model.PaymentEntity(
+                    id = paymentId,
+                    adminId = updatedBill.adminId,
+                    billId = updatedBill.id,
+                    userId = updatedBill.userId,
+                    invoiceNumber = updatedBill.invoiceNumber,
+                    userName = updatedBill.userName,
+                    amount = amountPaid,
+                    method = method,
+                    collectorId = collector?.id.orEmpty(),
+                    collectorName = collectorName,
+                    paymentDate = dateStr,
+                    paymentAt = System.currentTimeMillis(),
+                    beforeRemaining = beforeBill.remainingAmount.takeIf { it > 0 } ?: beforeBill.totalAmount,
+                    afterRemaining = updatedBill.remainingAmount,
+                    receiptNumber = 0L
+                )
+                val numberedPayment = repository.insertPaymentWithReceiptNumber(payment)
+                selectedBill.value = updatedBill
                 refreshDataNow()
-                val synced = localNetworkSync.saveBill(updatedBill)
-                lastSyncError.value = if (synced) null else "تعذّرت مزامنة حالة السداد عبر شبكة Wi‑Fi المحلية"
+
+                // لكل دفعة رقم إيصال مستقل محلياً؛ الإدارة تعيد الرقم المعتمد عند المزامنة.
+                val synced = localNetworkSync.registerPayment(numberedPayment)
+                lastSyncError.value = if (synced) null else "تعذّرت مزامنة إيصال التحصيل مع الإدارة؛ سيبقى محفوظاً على الجهاز حتى تتوفر المزامنة"
+                onCompleted(updatedBill, amountPaid, method, numberedPayment)
             }
         }
     }
 
     fun deleteBill(bill: BillEntity) {
         viewModelScope.launch {
+            // إزالة قراءة العداد المطابقة لفاتورة غير مدفوعة تمنع استخدامها
+            // كقراءة سابقة عند إصدار الفاتورة من جديد بعد حذفها.
+            if (bill.paidAmount <= 0.0 && bill.status != BillStatus.CARRIED.name) {
+                val readings = db.meterReadingDao().getForUser(bill.userId)
+                val linkedReading = readings
+                    .filter { kotlin.math.abs(it.previousReading - bill.prevReading) < 0.001 }
+                    .filter { kotlin.math.abs(it.currentReading - bill.currentReading) < 0.001 }
+                    .filter { bill.readingDate.isBlank() || it.readingDate == bill.readingDate }
+                    .maxByOrNull { it.createdAt }
+                if (linkedReading != null) repository.deleteMeterReading(linkedReading.id)
+            }
             repository.deleteBill(bill)
             refreshDataNow()
+            _refreshMeterReadingsFromDb()
             localNetworkSync.deleteBill(bill)
             selectedBill.value = null
         }
@@ -746,6 +934,14 @@ class BillingViewModel(application: Application) : AndroidViewModel(application)
             repository.updateUser(user)
             refreshDataNow()
             localNetworkSync.saveUser(user)
+        }
+    }
+
+    fun updateUnitPriceForEveryone(newPrice: Double, onCompleted: (Int) -> Unit = {}) {
+        viewModelScope.launch {
+            val count = repository.updateUnitPriceForEveryone(newPrice)
+            refreshDataNow()
+            onCompleted(count)
         }
     }
     override fun onCleared() {

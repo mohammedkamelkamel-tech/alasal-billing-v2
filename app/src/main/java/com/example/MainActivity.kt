@@ -24,9 +24,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.ui.components.AppBottomNavigation
 import com.example.ui.components.AppTopBar
+import com.example.ui.components.AppWatermarkBackground
 import com.example.ui.screens.*
 import com.example.ui.theme.ElectricityBillingTheme
 import com.example.ui.viewmodel.BillingViewModel
+import com.example.utils.WhatsAppHelper
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
             val users by viewModel.users.collectAsStateWithLifecycle()
             val bills by viewModel.bills.collectAsStateWithLifecycle()
+            val payments by viewModel.payments.collectAsStateWithLifecycle()
 
             val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
             val billFilter by viewModel.billFilter.collectAsStateWithLifecycle()
@@ -127,6 +130,7 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
                     topBar = {
                         if (showTopBar) {
                             AppTopBar(
@@ -164,6 +168,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
+                    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                        AppWatermarkBackground()
                     NavHost(
                         navController = navController,
                         startDestination = if (currentAccessKey == null) "login" else "home",
@@ -188,7 +194,7 @@ class MainActivity : ComponentActivity() {
                                 canPerformAction = { key -> viewModel.canPerformAction(key) },
                                 bills = bills,
                                 users = users,
-                                onAddBillClick = { navController.navigate("add_edit_bill") },
+                                onAddBillClick = { viewModel.selectedBill.value = null; navController.navigate("add_edit_bill") },
                                 onBillClick = { bill ->
                                     viewModel.selectBill(bill)
                                     navController.navigate("bill_details")
@@ -210,10 +216,21 @@ class MainActivity : ComponentActivity() {
                                         viewModel.selectBill(bill)
                                         navController.navigate("bill_details")
                                     },
-                                    onAddBillClick = { navController.navigate("add_edit_bill") },
+                                    onAddBillClick = { viewModel.selectedBill.value = null; navController.navigate("add_edit_bill") },
+                                    onWhatsAppClick = { bill ->
+                                        if (!WhatsAppHelper.sendInvoice(this@MainActivity, bill)) {
+                                            Toast.makeText(this@MainActivity, "تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
                                     // الدفع الجزئي: يُمرَّر المبلغ المدفوع فعلياً من نافذة الدفع
                                     onPayClick = { bill, amount, method ->
-                                        viewModel.payBill(bill.id, amount, method)
+                                        viewModel.payBill(bill.id, amount, method,
+                                            onCompleted = { updatedBill, paidAmount, paidMethod, payment ->
+                                                if (!WhatsAppHelper.sendCollectionReceipt(this@MainActivity, payment, updatedBill.userPhone)) {
+                                                    Toast.makeText(this@MainActivity, "تم التحصيل، لكن تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        )
                                         val remaining = (bill.remainingAmount.takeIf { it > 0.0 } ?: bill.totalAmount) - amount
                                         val msg = when {
                                             remaining > 0.0 -> "تم تسجيل دفعة جزئية للفاتورة ${bill.invoiceNumber}، المتبقي ${com.example.utils.CurrencyFormatter.riyal(remaining)}"
@@ -228,9 +245,28 @@ class MainActivity : ComponentActivity() {
                             composable("collection") {
                                 CollectionScreen(
                                     bills = bills,
+                                    payments = payments,
                                     canPerformAction = { key -> viewModel.canPerformAction(key) },
+                                    onWhatsAppClick = { bill ->
+                                        if (!WhatsAppHelper.sendInvoice(this@MainActivity, bill)) {
+                                            Toast.makeText(this@MainActivity, "تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onReceiptClick = { payment, phone ->
+                                        if (payment.receiptNumber <= 0L) {
+                                            Toast.makeText(this@MainActivity, "رقم الإيصال غير متوفر لهذه الدفعة القديمة", Toast.LENGTH_LONG).show()
+                                        } else if (!WhatsAppHelper.sendCollectionReceipt(this@MainActivity, payment, phone)) {
+                                            Toast.makeText(this@MainActivity, "تعذّر فتح WhatsApp أو رقم هاتف المشترك غير متوفر", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
                                     onPayClick = { bill, amount, method ->
-                                        viewModel.payBill(bill.id, amount, method)
+                                        viewModel.payBill(bill.id, amount, method,
+                                            onCompleted = { updatedBill, paidAmount, paidMethod, payment ->
+                                                if (!WhatsAppHelper.sendCollectionReceipt(this@MainActivity, payment, updatedBill.userPhone)) {
+                                                    Toast.makeText(this@MainActivity, "تم التحصيل، لكن تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        )
                                         val remaining = (bill.remainingAmount.takeIf { it > 0.0 } ?: bill.totalAmount) - amount
                                         val msg = when {
                                             remaining > 0.0 -> "تم تسجيل تحصيل جزئي، المتبقي ${com.example.utils.CurrencyFormatter.riyal(remaining)}"
@@ -281,7 +317,12 @@ class MainActivity : ComponentActivity() {
                                     onUpdateUser = { updatedUser ->
                                         viewModel.updateUser(updatedUser)
                                     },
-                                    bills = bills
+                                    bills = bills,
+                                    onUpdateUnitPriceForEveryone = { newPrice ->
+                                        viewModel.updateUnitPriceForEveryone(newPrice) { count ->
+                                            Toast.makeText(this@MainActivity, "تم تحديث سعر الكيلو إلى $newPrice ريال وإعادة حساب $count فاتورة", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
                                 )
                             }
 
@@ -325,7 +366,13 @@ class MainActivity : ComponentActivity() {
                                         bill = bill,
                                         onBackClick = { navController.popBackStack() },
                                         onPayClick = { b, amount, method ->
-                                            viewModel.payBill(b.id, amount, method)
+                                            viewModel.payBill(b.id, amount, method,
+                                                onCompleted = { updatedBill, paidAmount, paidMethod, payment ->
+                                                    if (!WhatsAppHelper.sendCollectionReceipt(this@MainActivity, payment, updatedBill.userPhone)) {
+                                                        Toast.makeText(this@MainActivity, "تم التحصيل، لكن تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            )
                                             val remaining = (b.remainingAmount.takeIf { it > 0.0 } ?: b.totalAmount) - amount
                                             val msg = when {
                                                 remaining > 0.0 -> "تم تسجيل دفعة جزئية، المتبقي ${com.example.utils.CurrencyFormatter.riyal(remaining)}"
@@ -336,6 +383,11 @@ class MainActivity : ComponentActivity() {
                                         },
                                         // تعديل الفاتورة متاح للمسؤول فقط، وغير ذلك تظهر رسالة "ليس لديك صلاحية"
                                         canEdit = viewModel.canEditBills(),
+                                        onWhatsAppClick = {
+                                            if (!WhatsAppHelper.sendInvoice(this@MainActivity, bill)) {
+                                                Toast.makeText(this@MainActivity, "تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
                                         onEditClick = { navController.navigate("add_edit_bill") },
                                         onDeleteClick = { b ->
                                             viewModel.deleteBill(b)
@@ -349,33 +401,49 @@ class MainActivity : ComponentActivity() {
                             }
 
     
-                        composable("meter_reading") {
+                                                composable("meter_reading") {
                             MeterReadingScreen(
                                 users = users,
+                                readings = viewModel.meterReadings.collectAsStateWithLifecycle().value,
                                 lastReadingFor = { uid -> viewModel.lastReadingForUser(uid) },
                                 onSaveReading = { uid, name, current, date, notes, image ->
                                     viewModel.addMeterReading(uid, name, current, date, notes, image)
                                     Toast.makeText(this@MainActivity, "تم حفظ قراءة العداد", Toast.LENGTH_SHORT).show()
-                                    navController.popBackStack()
+                                },
+                                onUpdateReading = { id, previous, current, date, notes, image ->
+                                    viewModel.updateMeterReading(id, previous, current, date, notes, image)
+                                    Toast.makeText(this@MainActivity, "تم تعديل قراءة العداد وتحديث الفاتورة المرتبطة", Toast.LENGTH_SHORT).show()
                                 },
                                 onCancel = { navController.popBackStack() }
                             )
                         }
 
                         composable("add_edit_bill") {
-                                AddEditBillScreen(
-                                    users = users,
-                                    lastReadingFor = { uid -> viewModel.lastReadingForUser(uid) },
-                                    arrearsFor = { uid -> viewModel.duesForUser(uid) },
-                                    onSaveBill = { uId, uName, uPhone, uAddress, prevR, currR, date, notes, unitPrice, readingImageUri ->
-                                        viewModel.addBill(uId, uName, uPhone, uAddress, prevR, currR, date, notes, unitPrice, readingImageUri)
-                                        navController.popBackStack()
-                                    },
-                                    onCancel = { navController.popBackStack() }
-                                )
-                            }
+                            AddEditBillScreen(
+                                users = users,
+                                lastReadingFor = { uid -> viewModel.lastReadingForUser(uid) },
+                                arrearsFor = { uid -> viewModel.duesForUser(uid) },
+                                existingBill = selectedBill,
+                                onSaveBill = { uId, uName, uPhone, uAddress, prevR, currR, date, notes, unitPrice, readingImageUri ->
+                                    viewModel.addBill(
+                                        uId, uName, uPhone, uAddress, prevR, currR, date, notes, unitPrice, readingImageUri,
+                                        onSaved = { bill ->
+                                            if (!WhatsAppHelper.sendInvoice(this@MainActivity, bill)) {
+                                                Toast.makeText(this@MainActivity, "تم حفظ الفاتورة، لكن تعذّر فتح WhatsApp للعميل", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    )
+                                    navController.popBackStack()
+                                },
+                                onUpdateBill = { billId, prevR, currR, date, notes, unitPrice, readingImageUri ->
+                                    viewModel.updateBill(billId, prevR, currR, date, notes, unitPrice, readingImageUri)
+                                    navController.popBackStack()
+                                },
+                                onCancel = { navController.popBackStack() }
+                            )
+                        }
 
-                            composable("profile") {
+composable("profile") {
                                 ProfileScreen(
                                     currentAccessKey = currentAccessKey,
                                     allAccessKeys = allAccessKeys,
@@ -389,6 +457,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+                    }
                     }
                 }
             }

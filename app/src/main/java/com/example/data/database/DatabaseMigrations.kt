@@ -152,3 +152,45 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         db.execSQL("ALTER TABLE users ADD COLUMN unitPrice REAL NOT NULL DEFAULT 170.0")
     }
 }
+
+
+/** سجل مستقل لكل عملية تحصيل لمنع اختلاط/استبدال إيصالات المحصلين. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT NOT NULL PRIMARY KEY,
+                adminId TEXT NOT NULL,
+                billId TEXT NOT NULL,
+                userId TEXT NOT NULL,
+                invoiceNumber TEXT NOT NULL,
+                userName TEXT NOT NULL,
+                amount REAL NOT NULL,
+                method TEXT NOT NULL,
+                collectorId TEXT NOT NULL,
+                collectorName TEXT NOT NULL,
+                paymentDate TEXT NOT NULL,
+                paymentAt INTEGER NOT NULL,
+                beforeRemaining REAL NOT NULL,
+                afterRemaining REAL NOT NULL,
+                receiptNumber INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        // تحويل آخر عملية دفع معروفة لكل فاتورة قديمة إلى سجل تاريخي.
+        db.execSQL("""
+            INSERT OR IGNORE INTO payments (
+                id, adminId, billId, userId, invoiceNumber, userName, amount, method,
+                collectorId, collectorName, paymentDate, paymentAt, beforeRemaining,
+                afterRemaining, receiptNumber
+            )
+            SELECT
+                'legacy-' || id, adminId, id, userId, invoiceNumber, userName, paidAmount,
+                CASE WHEN paymentMethod = '' THEN 'نقدي' ELSE paymentMethod END,
+                '', paymentCollector, paymentDate,
+                paymentAt, remainingAmount + paidAmount, remainingAmount, 0
+            FROM bills
+            WHERE paidAmount > 0
+        """.trimIndent())
+    }
+}

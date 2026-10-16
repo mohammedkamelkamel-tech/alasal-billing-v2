@@ -8,20 +8,27 @@ import com.example.data.model.MeterReadingEntity
 import com.example.data.model.ReadingReminderEntity
 import com.example.data.model.BillStatus
 import com.example.data.model.RolePermissionEntity
+import com.example.data.model.PaymentEntity
 import com.example.data.model.UserEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class BillingRepository(
     private val userDao: UserDao,
     private val billDao: BillDao,
     private val permissionDao: PermissionDao,
     private val meterReadingDao: com.example.data.dao.MeterReadingDao,
-    private val readingReminderDao: com.example.data.dao.ReadingReminderDao
+    private val readingReminderDao: com.example.data.dao.ReadingReminderDao,
+    private val paymentDao: com.example.data.dao.PaymentDao
 ) {
+    private val receiptMutex = Mutex()
     val allUsers: Flow<List<UserEntity>> = userDao.getAllUsers()
     val allBills: Flow<List<BillEntity>> = billDao.getAllBills()
     val allMeterReadings: Flow<List<MeterReadingEntity>> = meterReadingDao.getAll()
     val activeReadingReminders: Flow<List<ReadingReminderEntity>> = readingReminderDao.getActive()
+    val allPayments: Flow<List<PaymentEntity>> = paymentDao.getAll()
 
     fun getBillsByStatus(status: String): Flow<List<BillEntity>> = billDao.getBillsByStatus(status)
 
@@ -53,11 +60,21 @@ class BillingRepository(
 
     suspend fun insertBill(bill: BillEntity): Unit = billDao.insertBill(bill)
     suspend fun insertMeterReading(reading: MeterReadingEntity) = meterReadingDao.insert(reading)
+    suspend fun updateMeterReading(reading: MeterReadingEntity) = meterReadingDao.update(reading)
+    suspend fun deleteMeterReading(id: String) = meterReadingDao.deleteById(id)
     suspend fun insertReadingReminder(reminder: ReadingReminderEntity) = readingReminderDao.insert(reminder)
     suspend fun completeReadingReminder(id: String) = readingReminderDao.complete(id)
     suspend fun deleteReadingReminder(id: String) = readingReminderDao.delete(id)
     suspend fun updateBill(bill: BillEntity) = billDao.updateBill(bill)
     suspend fun deleteBill(bill: BillEntity) = billDao.deleteBill(bill)
+    suspend fun insertPayment(payment: PaymentEntity) = paymentDao.insert(payment)
+    /** يخصص رقم إيصال محلياً ويحفظ الدفعة بتسلسل لتفادي تكرار الرقم على الجهاز. */
+    suspend fun insertPaymentWithReceiptNumber(payment: PaymentEntity): PaymentEntity = receiptMutex.withLock {
+        val numbered = payment.copy(receiptNumber = paymentDao.nextReceiptNumber())
+        paymentDao.insert(numbered)
+        numbered
+    }
+    suspend fun getPaymentsForBill(billId: String): List<PaymentEntity> = paymentDao.getForBill(billId)
 
     suspend fun markBillCarriedForward(id: String) = billDao.markBillCarriedForward(id)
 
@@ -73,6 +90,8 @@ class BillingRepository(
         collectorName: String
     ): BillEntity? {
         val bill = billDao.getBillById(billId) ?: return null
+        // لا تسمح بتسجيل دفعة جديدة على فاتورة مسددة/ذات رصيد زائد.
+        if (bill.remainingAmount <= 0.0) return null
         // السماح بالدفع الزائد: إذا دفع المشترك أكثر من المستحق، يُحفظ الفرق كرصيد
         // سالب في remainingAmount ليُخصم تلقائياً من الفاتورة القادمة.
         val newPaid = bill.paidAmount + amountPaidNow
@@ -89,6 +108,27 @@ class BillingRepository(
 
     suspend fun insertUser(user: UserEntity): Unit = userDao.insertUser(user)
     suspend fun updateUser(user: UserEntity) = userDao.updateUser(user)
+
+    suspend fun updateUnitPriceForEveryone(newPrice: Double): Int {
+        val price = newPrice.coerceAtLeast(0.0)
+        val allUsersList = allUsers.first()
+        allUsersList.forEach { userDao.updateUser(it.copy(unitPrice = price)) }
+        val allBillsList = allBills.first()
+        var count = 0
+        allBillsList.filter { it.status != "CARRIED" }.forEach { bill ->
+            val subtotal = bill.consumptionKwh.coerceAtLeast(0.0) * price
+            val total = (subtotal + bill.previousDebt).coerceAtLeast(0.0)
+            val remaining = (total - bill.paidAmount).coerceAtLeast(0.0)
+            val status = when {
+                remaining <= 0.0 -> "PAID"
+                bill.paidAmount > 0.0 -> "PARTIAL"
+                else -> "UNPAID"
+            }
+            billDao.updateBill(bill.copy(unitPrice = price, subtotalAmount = subtotal, totalAmount = total, remainingAmount = remaining, status = status))
+            count++
+        }
+        return count
+    }
     suspend fun deleteUser(user: UserEntity) = userDao.deleteUser(user)
     suspend fun updateUserStatus(id: String, isActive: Boolean) = userDao.updateUserStatus(id, isActive)
 
